@@ -1,0 +1,3 @@
+[browser]
+# The app shows personal location history; don't send Streamlit usage telemetry.
+gatherUsageStats = false

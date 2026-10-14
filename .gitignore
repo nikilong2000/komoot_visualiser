@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+.venv/
+.pytest_cache/
+
+# macOS
+.DS_Store
+
+# Tour data is personal location history (start/end points reveal home) - never commit it
+data/

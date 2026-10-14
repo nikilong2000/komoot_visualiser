@@ -1,0 +1,31 @@
+[project]
+name = "komoot-visualiser"
+version = "0.1.0"
+description = "Shows all recorded Komoot tours as coloured lines on a world map"
+readme = "README.md"
+authors = [
+    { name = "nikilong2000", email = "niklaslongschiefelbein@gmail.com" }
+]
+requires-python = ">=3.14"
+dependencies = [
+    "gpxpy>=1.6.2",
+    "numpy>=2.5.4",
+    "pydeck>=0.9.3",
+    "shapely>=2.2.0",
+    "streamlit>=1.65.0",
+]
+
+[project.scripts]
+komoot-sync = "komoot_visualiser.sync:main"
+
+[build-system]
+requires = ["uv_build>=0.11.2,<0.12.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
