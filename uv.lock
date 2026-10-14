@@ -318,6 +318,7 @@ dependencies = [
     { name = "gpxpy" },
     { name = "numpy" },
     { name = "pydeck" },
+    { name = "requests" },
     { name = "shapely" },
     { name = "streamlit" },
 ]
@@ -332,6 +333,7 @@ requires-dist = [
     { name = "gpxpy", specifier = ">=1.6.2" },
     { name = "numpy", specifier = ">=2.5.4" },
     { name = "pydeck", specifier = ">=0.9.3" },
+    { name = "requests", specifier = ">=2.34.2" },
     { name = "shapely", specifier = ">=2.2.0" },
     { name = "streamlit", specifier = ">=1.65.0" },
 ]

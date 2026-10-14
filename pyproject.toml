@@ -11,12 +11,13 @@ dependencies = [
     "gpxpy>=1.6.2",
     "numpy>=2.5.4",
     "pydeck>=0.9.3",
+    "requests>=2.34.2",
     "shapely>=2.2.0",
     "streamlit>=1.65.0",
 ]
 
 [project.scripts]
-komoot-sync = "komoot_visualiser.sync:main"
+komoot-visualiser = "komoot_visualiser.cli:main"
 
 [build-system]
 requires = ["uv_build>=0.11.2,<0.12.0"]
