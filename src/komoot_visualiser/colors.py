@@ -5,9 +5,14 @@
 TOUR_COLORS = ("#3245b7", "#b17000", "#14938d", "#ac1c0f", "#4285f4", "#881d83", "#056641", "#df4f70", "#ae55c1")
 
 
+def hex_color_for_tour(tour_id: str) -> str:
+    """Colour for a tour. Hashing the id keeps the colour when other tours are added or removed."""
+    return TOUR_COLORS[_fnv1a(tour_id) % len(TOUR_COLORS)]
+
+
 def color_for_tour(tour_id: str) -> tuple[int, int, int]:
-    """RGB colour for a tour. Hashing the id keeps the colour when other tours are added or removed."""
-    hex_color = TOUR_COLORS[_fnv1a(tour_id) % len(TOUR_COLORS)]
+    """The same colour as RGB, as the map layers want it."""
+    hex_color = hex_color_for_tour(tour_id)
     return int(hex_color[1:3], 16), int(hex_color[3:5], 16), int(hex_color[5:7], 16)
 
 

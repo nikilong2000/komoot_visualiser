@@ -11,14 +11,33 @@ import streamlit as st
 
 from komoot_visualiser import komoot, tracks
 from komoot_visualiser.colors import color_for_tour
+from komoot_visualiser.ui import FETCH_NOTICE, fetch_form, plural, tour_details
 from komoot_visualiser.viewport import fit_bounds
 
-MAP_HEIGHT = 620
-#: The map's real width depends on the browser window; fit the tours into at least this much.
-MIN_MAP_WIDTH = 900
+SIDEBAR_WIDTH = 400
+#: The map's size depends on the browser window; the first view fits the tours into at least this much.
+FIT_WIDTH, FIT_HEIGHT = 800, 600
 WORLD_VIEW = pdk.ViewState(latitude=30, longitude=10, zoom=1.5)
+#: Routes are drawn thin when zoomed out, so clicks go to an invisible copy this many pixels wide.
+#: (deck.gl's own pickingRadius would do this, but Streamlit doesn't pass it on.)
+CLICK_WIDTH = 14
 #: Changes whenever the parsing code is edited, so the disk cache never returns tours parsed by older code.
 PARSER_VERSION = Path(tracks.__file__).stat().st_mtime_ns
+
+# Streamlit can only give elements a fixed height in pixels. This lets the map's container (key "map_area")
+# take all the height left below the title, so the map always reaches the bottom of the window.
+# It also centres dialogs vertically ("safe" keeps a dialog taller than the window scrollable).
+LAYOUT_CSS = """
+<style>
+[data-testid="stMainBlockContainer"] { height: 100dvh; padding-bottom: 1rem; }
+[data-testid="stMainBlockContainer"] > [data-testid="stVerticalBlock"] { height: 100%; }
+[data-testid="stLayoutWrapper"]:has(> .st-key-map_area) { flex: 1 1 0; min-height: 400px; }
+.st-key-map_area { height: 100%; }
+[data-testid="stDialog"] { align-items: safe center; }
+</style>
+"""
+
+fetch_dialog = st.dialog("Fetch from Komoot", on_dismiss="rerun")(fetch_form)
 
 
 @st.cache_data(persist="disk", show_spinner=False)
@@ -30,91 +49,73 @@ def read_tour(path: str, modified_ns: int, parser_version: int) -> tracks.Tour |
     return tracks.read_tour(Path(path), tracks.GPX_DIR)
 
 
-def plural(count: int, word: str) -> str:
-    return f"{count:,} {word}{'' if count == 1 else 's'}"
+def path_rows(tours: list[tracks.Tour]) -> list[dict]:
+    return [{"path": line, "color": color_for_tour(tour.id)} for tour in tours for line in tour.lines]
 
 
-def take_login() -> None:
-    """Submit callback: hands the login over to this run only and blanks the password field right away.
-
-    Streamlit keeps widget values in the session, so without this the password would stay in memory.
-    """
-    st.session_state["pending_login"] = (st.session_state["komoot_email"].strip(), st.session_state["komoot_password"])
-    st.session_state["komoot_password"] = ""
-
-
-def fetch_form() -> None:
-    """Form that downloads the recorded tours of a Komoot account into data/gpx/komoot/."""
-    st.subheader("Fetch from Komoot")
-    with st.form("komoot"):
-        st.text_input("Email", key="komoot_email", autocomplete="email")
-        st.text_input("Password", key="komoot_password", type="password", autocomplete="current-password")
-        st.form_submit_button("Fetch tours", type="primary", width="stretch", on_click=take_login)
-    st.caption("Uses Komoot's unofficial API. Your password is only sent to Komoot and never stored.")
-    login = st.session_state.pop("pending_login", None)
-    if login is None:
-        return
-
-    email, password = login
-    if not email or not password:
-        st.error("Enter your Komoot email and password.")
-        return
-
-    with st.status("Logging in to Komoot…", expanded=True) as status:
-        progress = st.progress(0.0)
-
-        def on_progress(done: int, total: int) -> None:
-            status.update(label=f"Fetching tours… {done} of {total}")
-            progress.progress(done / total if total else 1.0)
-
-        try:
-            result = komoot.sync_recorded_tours(email, password, tracks.GPX_DIR / "komoot", on_progress=on_progress)
-        except (komoot.KomootError, OSError) as error:
-            status.update(label="Fetching failed", state="error")
-            st.error(str(error))
-            return
-
-        status.update(
-            label=f"{plural(result.downloaded, 'tour')} downloaded, {result.unchanged:,} unchanged",
-            state="complete",
-            expanded=bool(result.failed),
+def tour_layers(tours: list[tracks.Tour], selected: tracks.Tour | None) -> list[pdk.Layer]:
+    """All tours, the selected one drawn wider with a dark outline, and on top the invisible click targets."""
+    # pydeck turns plain strings into per-object expressions ("color" reads each row's color);
+    # only quoted strings reach deck.gl as text.
+    meters, pixels = "'meters'", "'pixels'"
+    line_style = {"get_path": "path", "cap_rounded": True, "joint_rounded": True}
+    layers = [
+        pdk.Layer(
+            "PathLayer",
+            path_rows(tours),
+            id="tours",
+            get_color="color",
+            # 60 m wide, but at least 3 px when zoomed out and at most 5 px at street level
+            get_width=60,
+            width_units=meters,
+            width_min_pixels=3,
+            width_max_pixels=5,
+            **line_style,
         )
-        for failure in result.failed:
-            st.warning(failure)
-
-
-def tour_layer(tours: list[tracks.Tour]) -> pdk.Layer:
-    rows = [{"path": line, "color": color_for_tour(tour.id)} for tour in tours for line in tour.lines]
-    return pdk.Layer(
-        "PathLayer",
-        rows,
-        get_path="path",
-        get_color="color",
-        # 60 m wide, but at least 1.5 px when zoomed out and at most 5 px at street level
-        get_width=60,
-        width_units="meters",
-        width_min_pixels=1.5,
-        width_max_pixels=5,
-        cap_rounded=True,
-        joint_rounded=True,
+    ]
+    if selected:
+        rows = path_rows([selected])
+        layers += [
+            pdk.Layer("PathLayer", rows, id="selected-outline", get_color=[20, 20, 20, 200], get_width=9, width_units=pixels, **line_style),
+            pdk.Layer("PathLayer", rows, id="selected", get_color="color", get_width=5, width_units=pixels, **line_style),
+        ]
+    layers.append(
+        pdk.Layer(
+            "PathLayer",
+            [{"tour": tour.id, "path": line} for tour in tours for line in tour.lines],
+            id="click-targets",
+            get_width=CLICK_WIDTH,
+            width_units=pixels,
+            pickable=True,
+            # Invisible but still clickable. A transparent colour doesn't work: Streamlit recolours
+            # the objects of clickable layers once something is selected.
+            opacity=0,
+            **line_style,
+        )
     )
+    return layers
+
+
+def selected_tour_id(map_state) -> str | None:
+    """Id of the route last clicked on the map, from the chart's selection state."""
+    picked = (map_state or {}).get("selection", {}).get("objects", {}).get("click-targets", [])
+    return picked[0].get("tour") if picked else None
 
 
 def initial_view(tours: list[tracks.Tour]) -> pdk.ViewState:
     box = tracks.bounds(tours)
     if box is None:
         return WORLD_VIEW
-    longitude, latitude, zoom = fit_bounds(box, width=MIN_MAP_WIDTH, height=MAP_HEIGHT)
+    longitude, latitude, zoom = fit_bounds(box, width=FIT_WIDTH, height=FIT_HEIGHT)
     return pdk.ViewState(longitude=longitude, latitude=latitude, zoom=zoom)
 
 
-st.set_page_config(page_title="Komoot Visualiser", page_icon=":material/route:", layout="wide")
-
-with st.sidebar:
-    # Filled in once the tours are loaded, but shown above the form. Fetching comes first so that
-    # tours it downloads are already on the map in this run.
-    filter_box = st.container()
-    fetch_form()
+st.set_page_config(
+    page_title="Komoot Visualiser", page_icon=":material/route:", layout="wide", initial_sidebar_state=SIDEBAR_WIDTH
+)
+st.html(LAYOUT_CSS)
+if notice := st.session_state.pop(FETCH_NOTICE, None):
+    st.toast(notice, icon=":material/check_circle:")
 
 files = tracks.find_gpx_files(tracks.GPX_DIR)
 with st.spinner(f"Reading {len(files)} GPX files…"):
@@ -124,34 +125,45 @@ with st.spinner(f"Reading {len(files)} GPX files…"):
     ]
 tours, warnings = tracks.collect(results)
 
-shown = tours
-if tours:
-    with filter_box:
+with st.sidebar:
+    open_fetch_dialog = st.button("Fetch from Komoot", icon=":material/download:", width="stretch")
+    shown = tours
+    if tours:
         st.subheader("Filter")
         longest = max(1, math.ceil(max(tour.distance_km for tour in tours)))
         low, high = st.slider("Distance", min_value=0, max_value=longest, value=(0, longest), format="%d km")
         shown = [tour for tour in tours if low <= tour.distance_km <= high]
+
+    # A route hidden by the filter counts as not selected.
+    selected = next((tour for tour in shown if tour.id == selected_tour_id(st.session_state.get("map"))), None)
+    st.divider()
+    if selected:
+        tour_details(selected, komoot.read_sports(tracks.GPX_DIR / "komoot").get(selected.id) or selected.sport)
+    elif tours:
+        st.caption("Click a route on the map to see its details.")
+
+if open_fetch_dialog:
+    fetch_dialog()
 
 st.subheader("Komoot Visualiser")
 if tours:
     count = plural(len(tours), "tour") if len(shown) == len(tours) else f"{len(shown):,} of {plural(len(tours), 'tour')}"
     st.caption(f"{count} · {sum(tour.distance_km for tour in shown):,.0f} km")
 else:
-    st.info("No tours yet. Fetch them from Komoot in the sidebar, or copy .gpx files into `data/gpx/`.")
+    st.info("No tours yet. Fetch them from Komoot with the button in the sidebar, or copy .gpx files into `data/gpx/`.")
 
-st.pydeck_chart(
-    pdk.Deck(
-        layers=[tour_layer(shown)],
-        # Fitted to all tours, not just the filtered ones, so filtering doesn't move the map.
-        initial_view_state=initial_view(tours),
-        # repeat: keep drawing the tours when panning past the date line
-        views=[pdk.View(type="MapView", controller=True, repeat=True)],
-        map_provider="carto",
-        map_style=pdk.map_styles.CARTO_LIGHT,
-        tooltip=False,
-    ),
-    height=MAP_HEIGHT,
+deck = pdk.Deck(
+    layers=tour_layers(shown, selected),
+    # Fitted to all tours, not just the filtered ones, so filtering and clicking don't move the map.
+    initial_view_state=initial_view(tours),
+    # repeat: keep drawing the tours when panning past the date line
+    views=[pdk.View(type="MapView", controller=True, repeat=True)],
+    map_provider="carto",
+    map_style=pdk.map_styles.CARTO_LIGHT,
+    tooltip=False,
 )
+with st.container(key="map_area"):
+    st.pydeck_chart(deck, on_select="rerun", selection_mode="single-object", key="map", height="stretch")
 
 if warnings:
     with st.expander(f"{plural(len(warnings), 'GPX file')} skipped"):

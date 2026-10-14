@@ -5,10 +5,11 @@ Komoot has no public API. This makes the same requests as the komootgpx CLI 1.6.
 The password is only sent to Komoot to log in; it is never stored.
 """
 
+import json
 import os
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from urllib.parse import quote
 
@@ -22,6 +23,9 @@ TOUR_QUERY = (
     "&fields=timeline&format=coordinate_array&timeline_highlights_fields=tips,recommenders"
 )
 TIMEOUT_SECONDS = 30
+#: Sport of every fetched tour by id. GPX files from komootgpx don't carry it, and they don't get downloaded
+#: again while unchanged, so it comes from the tour list on every fetch instead.
+SPORTS_FILE = "tours.json"
 
 
 class KomootError(Exception):
@@ -60,6 +64,10 @@ def sync_recorded_tours(
     account = login(session, email, password)
     tours = recorded_tours(session, account)
     output_dir.mkdir(parents=True, exist_ok=True)
+    _write_atomically(
+        output_dir / SPORTS_FILE,
+        json.dumps({str(tour["id"]): tour["sport"] for tour in tours if tour.get("id") and tour.get("sport")}),
+    )
 
     result = SyncResult(display_name=account.display_name)
     for done, tour in enumerate(tours):
@@ -77,6 +85,17 @@ def sync_recorded_tours(
     if on_progress:
         on_progress(len(tours), len(tours))
     return result
+
+
+def read_sports(output_dir: Path) -> dict[str, str]:
+    """Komoot sport (e.g. "hike", "touringbicycle") by tour id, as saved by the last fetch."""
+    try:
+        sports = json.loads((output_dir / SPORTS_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(sports, dict):
+        return {}
+    return {str(tour_id): sport for tour_id, sport in sports.items() if isinstance(sport, str)}
 
 
 def login(session: requests.Session, email: str, password: str) -> Account:
@@ -108,24 +127,41 @@ def build_gpx(tour: dict) -> str:
     points = tour["_embedded"]["coordinates"]["items"]
     start = datetime.fromisoformat(tour["date"])
     # Like komootgpx: times starting at 0 are milliseconds since the tour start, otherwise Unix time in ms.
+    # Either way they keep the tour's own time zone, so the start time reads as it did on the day.
     relative = bool(points) and points[0].get("t") == 0
 
     segment = gpxpy.gpx.GPXTrackSegment()
     for point in points:
         time = None
         if "t" in point:
-            time = start + timedelta(milliseconds=point["t"]) if relative else datetime.fromtimestamp(point["t"] / 1000, UTC)
+            time = (
+                start + timedelta(milliseconds=point["t"])
+                if relative
+                else datetime.fromtimestamp(point["t"] / 1000, start.tzinfo)
+            )
         segment.points.append(gpxpy.gpx.GPXTrackPoint(point["lat"], point["lng"], elevation=point.get("alt"), time=time))
 
     gpx = gpxpy.gpx.GPX()
     gpx.name = tour["name"]
+    gpx.description = _komoot_figures(tour)
     gpx.link = f"https://www.komoot.com/tour/{tour['id']}"
     gpx.link_text = "View tour on Komoot"
     gpx.creator = "komoot-visualiser"
     track = gpxpy.gpx.GPXTrack(name=tour["name"])
+    track.type = tour.get("sport")
     track.segments.append(segment)
     gpx.tracks.append(track)
     return gpx.to_xml()
+
+
+def _komoot_figures(tour: dict) -> str | None:
+    """Komoot's own distance, duration and elevation, worded like komootgpx so stats.komoot_elevation reads both."""
+    if not all(key in tour for key in ("distance", "duration", "elevation_up", "elevation_down")):
+        return None
+    return (
+        f"Distance: {tour['distance'] / 1000}km, Estimated duration: {round(tour['duration'] / 3600, 2)}h, "
+        f"Elevation up: {tour['elevation_up']}m, Elevation down: {tour['elevation_down']}m"
+    )
 
 
 def _save_tour(session: requests.Session, account: Account, tour: dict, output_dir: Path) -> bool:
@@ -138,13 +174,17 @@ def _save_tour(session: requests.Session, account: Account, tour: dict, output_d
     if path.exists() and abs(path.stat().st_mtime - changed_at) < 1:
         return False
 
-    gpx = tour_gpx(session, account, tour_id)
-    # Written next to the target and then renamed, so an interrupted sync never leaves half a GPX file.
-    partial = path.with_name(f"{path.name}.partial")
-    partial.write_text(gpx, encoding="utf-8")
-    os.utime(partial, (changed_at, changed_at))
-    partial.replace(path)
+    _write_atomically(path, tour_gpx(session, account, tour_id), modified=changed_at)
     return True
+
+
+def _write_atomically(path: Path, text: str, modified: float | None = None) -> None:
+    """Writes next to the target and then renames, so an interrupted fetch never leaves a half-written file."""
+    partial = path.with_name(f"{path.name}.partial")
+    partial.write_text(text, encoding="utf-8")
+    if modified is not None:
+        os.utime(partial, (modified, modified))
+    partial.replace(path)
 
 
 def _get(session: requests.Session, url: str, auth: tuple[str, str]) -> dict:

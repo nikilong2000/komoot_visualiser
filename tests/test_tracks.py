@@ -1,20 +1,57 @@
+from datetime import datetime, timedelta, timezone
+
 from gpx_samples import KOMOOT_EXPORT, gpx_file, track, trkpt
 
-from komoot_visualiser.tracks import Tour, bounds, collect, find_gpx_files, load_tours, parse_gpx
+from komoot_visualiser.tracks import bounds, collect, find_gpx_files, load_tours, parse_gpx
 
 
 def test_reads_a_komootgpx_export():
     tour = parse_gpx(KOMOOT_EXPORT, "komoot/123456789.gpx")
 
-    assert tour == Tour(
-        id="123456789",
-        name="Lakeside loop",
-        date="2024-05-12",
-        distance_km=11.5,
-        source="komoot/123456789.gpx",
-        lines=(((8.0, 47.0), (8.02, 47.05), (8.0, 47.1)),),
-        raw_points=3,
+    assert (tour.id, tour.name, tour.date, tour.distance_km, tour.source) == (
+        "123456789",
+        "Lakeside loop",
+        "2024-05-12",
+        11.5,
+        "komoot/123456789.gpx",
     )
+    assert tour.lines == (((8.0, 47.0), (8.02, 47.05), (8.0, 47.1)),)
+    assert tour.raw_points == 3
+
+
+def test_reads_start_duration_moving_time_elevation_and_sport():
+    xml = gpx_file(f"""
+      <metadata><desc>Distance: 1.1km, Estimated duration: 0.5h, Elevation up: 30.4m, Elevation down: 10.2m</desc></metadata>
+      <trk><type>hike</type><trkseg>
+        {trkpt(47.0, 8.0, "2024-05-12T07:30:00+02:00", ele=400)}
+        {trkpt(47.01, 8.0, "2024-05-12T07:39:00+02:00", ele=420)}
+        {trkpt(47.01, 8.0, "2024-05-12T07:48:00+02:00", ele=420)}
+      </trkseg></trk>""")
+
+    tour = parse_gpx(xml, "manual/hike.gpx")
+
+    assert tour.start == datetime(2024, 5, 12, 7, 30, tzinfo=timezone(timedelta(hours=2)))
+    assert (tour.duration_s, tour.moving_s) == (1080.0, 540.0)  # the last 9 minutes were a break
+    assert (tour.elevation_gain_m, tour.elevation_loss_m) == (30, 10)  # Komoot's own figures
+    assert tour.profile == ((0.0, 400), (1.11, 420), (1.11, 420))
+    assert tour.sport == "hike"
+
+
+def test_computes_elevation_without_komoot_figures():
+    points = [trkpt(47.0, 8.0, ele=400), trkpt(47.01, 8.0, ele=450), trkpt(47.02, 8.0, ele=430)]
+
+    tour = parse_gpx(gpx_file(track(*points)), "manual/climb.gpx")
+
+    assert (tour.elevation_gain_m, tour.elevation_loss_m) == (50, 20)
+
+
+def test_leaves_out_what_the_gpx_has_no_data_for():
+    xml = gpx_file('<rte><rtept lat="47" lon="8"/><rtept lat="47.01" lon="8.01"/></rte>')
+
+    tour = parse_gpx(xml, "manual/route.gpx")
+
+    assert (tour.start, tour.duration_s, tour.moving_s) == (None, None, None)
+    assert (tour.elevation_gain_m, tour.elevation_loss_m, tour.profile, tour.sport) == (None, None, (), None)
 
 
 def test_reads_raw_file_bytes():

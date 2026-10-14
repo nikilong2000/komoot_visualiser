@@ -12,9 +12,12 @@ This opens the map in your browser at <http://localhost:8501>. Stop it with `Ctr
 
 ## Using the map
 
+- **Tour details:** click a route to see it in the sidebar: sport, date and start time, distance, duration, average speed, moving time and speed, elevation gain and loss, an elevation profile and a link to the tour on Komoot. Click an empty spot on the map, or the × above it, to clear the selection.
+  - Moving time leaves out stops (slower than 1 km/h) and gaps of more than 10 minutes in the recording.
+  - Elevation is Komoot's own figure where the GPX file carries it, otherwise it is added up from the GPS elevations.
 - **Filter:** the distance slider in the sidebar has two handles, for the shortest and longest tour to show.
-- **Fetch from Komoot:** enter your Komoot email and password in the sidebar and click **Fetch tours**.
-  - All recorded tours are saved as GPX files in `data/gpx/komoot/`. Later fetches only download tours that changed on Komoot since.
+- **Fetch from Komoot:** click the button at the top of the sidebar, enter your Komoot email and password and click **Fetch tours**.
+  - All recorded tours are saved as GPX files in `data/gpx/komoot/`, plus the sport of each tour in `tours.json`. Later fetches only download tours that changed on Komoot since.
   - The password is only sent to Komoot and never stored. The password field is blanked after every attempt.
   - This uses Komoot's private API (the same requests as the [komootgpx](https://github.com/timschneeb/KomootGPX) CLI), so it can break without notice.
   - If you sign in to Komoot with Google or Apple, set a password in your Komoot account first.
@@ -30,10 +33,12 @@ uv run pytest
 
 | File | What it does |
 | --- | --- |
-| `src/komoot_visualiser/app.py` | The Streamlit page |
+| `src/komoot_visualiser/app.py` | The Streamlit page: sidebar, map and route selection |
+| `src/komoot_visualiser/ui.py` | The fetch dialog and the tour details panel |
 | `src/komoot_visualiser/cli.py` | The `komoot-visualiser` command |
 | `src/komoot_visualiser/komoot.py` | Downloads tours from Komoot as GPX |
-| `src/komoot_visualiser/tracks.py` | GPX files → simplified tour lines |
+| `src/komoot_visualiser/tracks.py` | GPX files → tours with simplified lines and statistics |
+| `src/komoot_visualiser/stats.py` | Moving time, elevation and elevation profile from GPS points |
 | `src/komoot_visualiser/colors.py` | A stable colour per tour |
 | `src/komoot_visualiser/viewport.py` | Initial map view that fits all tours |
 

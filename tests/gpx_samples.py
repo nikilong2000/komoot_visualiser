@@ -8,8 +8,8 @@ def gpx_file(body: str) -> str:
     )
 
 
-def trkpt(lat: float, lon: float, time: str | None = None) -> str:
-    return f'<trkpt lat="{lat}" lon="{lon}"><ele>400</ele>{f"<time>{time}</time>" if time else ""}</trkpt>'
+def trkpt(lat: float, lon: float, time: str | None = None, ele: float = 400) -> str:
+    return f'<trkpt lat="{lat}" lon="{lon}"><ele>{ele}</ele>{f"<time>{time}</time>" if time else ""}</trkpt>'
 
 
 def track(*points: str, name: str | None = None) -> str:
